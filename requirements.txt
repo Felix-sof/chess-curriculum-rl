@@ -1,0 +1,36 @@
+# Core RL / chess stack
+python-chess>=1.10,<2
+gymnasium>=0.29,<1.3
+stable-baselines3>=2.6,<2.9
+sb3-contrib>=2.6,<2.9
+
+# PyTorch: if you already have a CUDA build installed (check with
+# `python -c "import torch; print(torch.__version__, torch.cuda.is_available())"`),
+# leave this line as a loose floor so pip doesn't silently replace it with a
+# CPU-only build from PyPI. Otherwise, install a CUDA build FIRST following
+# https://pytorch.org/get-started/locally/ (e.g. the cu121/cu124 wheel).
+# The stable-baselines3/sb3-contrib versions above require torch>=2.3,<3.0.
+torch>=2.3,<3.0
+
+# Config, logging, plotting
+# (No tensorboard: its gfile backend does not reliably handle native Windows
+# paths, which breaks on some machines. Training metrics go to stdout
+# (verbose=1) and to logs/curriculum_log.csv instead -- see plot_progress.py.)
+pyyaml>=6.0
+numpy>=1.26
+matplotlib>=3.8
+tqdm>=4.66
+rich>=13.7
+
+# Optional: Lichess Bot API integration (src/lichess_bot.py)
+berserk>=0.13
+
+# Optional: browser automation for src/browser_bot.py (play a website's own
+# bots directly, no API/account needed). After installing, also run once:
+#   playwright install chromium
+playwright>=1.40
+
+# Dev / quality
+pytest>=8.0
+black>=24.0
+ruff>=0.4

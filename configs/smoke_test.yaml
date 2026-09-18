@@ -1,0 +1,33 @@
+# Small-scale configuration for quickly verifying the training pipeline end to end.
+# Not meant to produce a strong agent -- just to prove curriculum + PPO + Stockfish wiring works.
+
+stockfish_path: "stockfish"
+
+log_dir: "logs/smoke_test"
+
+curriculum:
+  start_level: 0 # 0 = random-move bootstrap opponent; 1-21 = Stockfish Skill Level 0-20
+  max_level: 21
+  window_size: 5 # tiny window so a promotion can be observed quickly
+  promotion_threshold: 0.60
+
+engine:
+  think_time: 0.05
+
+reward:
+  material_reward_scale: 0.01
+  repetition_penalty: 0.05
+
+policy:
+  features_dim: 64
+
+training:
+  total_timesteps: 20_000
+  learning_rate: 0.0003
+  n_steps: 256
+  batch_size: 64
+  n_epochs: 4
+  gamma: 0.99
+  ent_coef: 0.01
+  checkpoint_freq: 5_000
+  n_envs: 1

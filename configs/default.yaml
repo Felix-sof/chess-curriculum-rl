@@ -1,0 +1,36 @@
+# Default training configuration for the curriculum-RL chess agent.
+
+# Path (or bare command, if it's on PATH) to the Stockfish UCI binary.
+# A bare command name relies on PATH lookup, which can be racy when many
+# parallel workers spawn it at once (see training/n_envs) -- prefer an
+# absolute path once you know where Stockfish is installed.
+stockfish_path: "stockfish"
+
+log_dir: "logs"
+
+curriculum:
+  start_level: 0 # 0 = random-move bootstrap opponent; 1-21 = Stockfish Skill Level 0-20
+  max_level: 21
+  window_size: 50 # games per rolling win-rate window
+  promotion_threshold: 0.70 # win rate required to advance a skill level
+
+engine:
+  think_time: 0.1 # seconds Stockfish spends per move (unused at level 0, the random-move stage)
+
+reward:
+  material_reward_scale: 0.01 # small per-move signal on top of the win/loss/draw outcome
+  repetition_penalty: 0.05 # discourages shuffling back into an already-seen position
+
+policy:
+  features_dim: 256
+
+training:
+  total_timesteps: 5_000_000
+  learning_rate: 0.0003
+  n_steps: 2048
+  batch_size: 256
+  n_epochs: 10
+  gamma: 0.99
+  ent_coef: 0.01 # entropy bonus; encourages exploring varied moves instead of an early local habit
+  checkpoint_freq: 50_000
+  n_envs: 1 # parallel Stockfish environments; raise (e.g. 8) on multi-core machines via --n-envs

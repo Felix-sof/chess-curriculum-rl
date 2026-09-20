@@ -215,16 +215,23 @@ def main() -> None:
     )
     curriculum_callback = CurriculumCallback(curriculum, verbose=1)
 
+    # total_timesteps is always the ABSOLUTE target step count, on a fresh
+    # run or a resumed one. Two SB3 quirks to work around for that:
+    #  1. .learn() resets the step counter to 0 on every call by default,
+    #     even after .load() restores it -- reset_num_timesteps=False stops
+    #     that (without it, resuming reruns from step 0, silently
+    #     overwriting the earlier run's checkpoint files at the same labels).
+    #  2. With reset_num_timesteps=False, SB3 then treats total_timesteps as
+    #     an ADDITIONAL step count, internally adding model.num_timesteps to
+    #     whatever is passed -- so it must be pre-subtracted here, or a
+    #     resumed run silently trains for (target + steps-already-done).
     total_timesteps = args.timesteps or config["training"]["total_timesteps"]
+    if args.resume:
+        total_timesteps = max(0, total_timesteps - model.num_timesteps)
     model.learn(
         total_timesteps=total_timesteps,
         callback=CallbackList([checkpoint_callback, curriculum_callback]),
         progress_bar=True,
-        # total_timesteps is always the ABSOLUTE target step count. Without
-        # this, .learn() resets the step counter to 0 on every call (even
-        # after .load() restores it), which reruns from step 0 -- silently
-        # overwriting the earlier run's checkpoint files at the same labels
-        # and training far longer than intended.
         reset_num_timesteps=not args.resume,
     )
 

@@ -71,6 +71,15 @@ whole `SubprocVecEnv`.
   at colliding step-count filenames on resume. Fixed by passing
   `reset_num_timesteps=not args.resume`.
 
+A second `reset_num_timesteps=False` subtlety, found only once round 5b
+overshot its target by ~3.3M steps: SB3 doesn't treat `total_timesteps` as
+an absolute target when resuming -- it internally *adds* the checkpoint's
+already-completed step count to whatever value is passed. `--timesteps
+6000000` on a checkpoint already at ~4.06M silently became a target of
+~10.06M. Fixed by pre-subtracting `model.num_timesteps` before calling
+`.learn()`, verified with a fresh 512-step run resumed to an absolute
+target of 768 (correctly trains exactly 256 more, not 512 more).
+
 ## Round 5 -- depth-ramp curriculum + supervised pretraining
 
 Two more changes: (1) inserted a depth-ramp between the random bootstrap

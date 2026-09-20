@@ -11,7 +11,8 @@ from typing import Any
 
 from sb3_contrib import MaskablePPO
 
-from env import ChessEnv
+from env import ChessEnv, move_to_action, stockfish_level_to_skill_level
+from search import best_move
 
 
 def evaluate(
@@ -20,17 +21,20 @@ def evaluate(
     stockfish_level: int,
     num_games: int,
     engine_think_time: float,
+    search_depth: int = 1,
 ) -> dict[str, Any]:
     """Play ``num_games`` against Stockfish at a fixed level and report the outcome tally.
 
     ``stockfish_level`` is the literal Stockfish Skill Level (0-20); it's
-    converted to ``ChessEnv``'s ``skill_level`` (which reserves 0 for the
-    random-move bootstrap opponent, shifting Stockfish levels to 1-21).
+    converted to ``ChessEnv``'s ``skill_level`` scale (which reserves the low
+    end for the random-move bootstrap and depth-ramp stages). ``search_depth``
+    > 1 picks moves via alpha-beta search (src/search.py) instead of the
+    network's single greedy forward pass.
     """
     model = MaskablePPO.load(model_path)
     env = ChessEnv(
         stockfish_path=stockfish_path,
-        skill_level=stockfish_level + 1,
+        skill_level=stockfish_level_to_skill_level(stockfish_level),
         engine_think_time=engine_think_time,
     )
 
@@ -42,8 +46,12 @@ def evaluate(
             reward = 0.0
             info: dict[str, Any] = {}
             while not (terminated or truncated):
-                action_masks = env.action_masks()
-                action, _states = model.predict(obs, action_masks=action_masks, deterministic=True)
+                if search_depth > 1:
+                    move = best_move(model, env.board, depth=search_depth)
+                    action = move_to_action(move, env.board.turn)
+                else:
+                    action_masks = env.action_masks()
+                    action, _states = model.predict(obs, action_masks=action_masks, deterministic=True)
                 obs, reward, terminated, truncated, info = env.step(int(action))
 
             if reward > 0:
@@ -72,12 +80,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stockfish-level", type=int, default=5)
     parser.add_argument("--num-games", type=int, default=20)
     parser.add_argument("--think-time", type=float, default=0.1)
+    parser.add_argument(
+        "--search-depth",
+        type=int,
+        default=1,
+        help="Ply of alpha-beta lookahead per move (1 = the network's own greedy choice, no search).",
+    )
     return parser
 
 
 def main() -> None:
     args = build_arg_parser().parse_args()
-    evaluate(args.model, args.stockfish_path, args.stockfish_level, args.num_games, args.think_time)
+    evaluate(
+        args.model,
+        args.stockfish_path,
+        args.stockfish_level,
+        args.num_games,
+        args.think_time,
+        args.search_depth,
+    )
 
 
 if __name__ == "__main__":

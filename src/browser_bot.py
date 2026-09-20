@@ -43,6 +43,7 @@ from playwright.sync_api import Page, sync_playwright
 from sb3_contrib import MaskablePPO
 
 from env import action_to_move, board_to_tensor, compute_action_mask
+from search import best_move
 
 _SAN_RE = re.compile(r"^(O-O(-O)?|[KQRBN]?[a-h]?[1-8]?x?[a-h][1-8](=[QRBN])?)[+#]?$")
 
@@ -259,6 +260,7 @@ def play_game(
     model: MaskablePPO,
     our_color: chess.Color,
     delay: float,
+    search_depth: int = 1,
     opponent_timeout: float = 120.0,
 ) -> str:
     """Play one full game, alternating our model's moves with the site's bot.
@@ -275,10 +277,13 @@ def play_game(
 
     while not board.is_game_over(claim_draw=True):
         if board.turn == our_color:
-            obs = board_to_tensor(board)
-            action_masks = compute_action_mask(board)
-            action, _states = model.predict(obs, action_masks=action_masks, deterministic=True)
-            move = action_to_move(int(action), board.turn)
+            if search_depth > 1:
+                move = best_move(model, board, depth=search_depth)
+            else:
+                obs = board_to_tensor(board)
+                action_masks = compute_action_mask(board)
+                action, _states = model.predict(obs, action_masks=action_masks, deterministic=True)
+                move = action_to_move(int(action), board.turn)
             adapter.make_move(page, move, our_color)
             board.push(move)
             known_ply += 1
@@ -297,6 +302,27 @@ def play_game(
     return board.result(claim_draw=True)
 
 
+def wait_for_manual_game_start(page: Page, poll_interval: float = 1.0, timeout: float = 600.0) -> chess.Color:
+    """Wait for a human to manually start a game in the visible browser window
+    (pick an opponent, accept a challenge, ...), then detect which color we're
+    playing from the board's orientation."""
+    with contextlib.suppress(AttributeError, ValueError):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    print("Tarayıcıda bir oyun başlat (rakip seç / meydan oku) - otomatik algılanacak...")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        pieces = page.query_selector_all("cg-board piece")
+        if len(pieces) > 0:
+            wrap = page.query_selector(".cg-wrap")
+            wrap_class = wrap.get_attribute("class") if wrap else ""
+            color = chess.BLACK if "orientation-black" in (wrap_class or "") else chess.WHITE
+            label = "siyah" if color == chess.BLACK else "beyaz"
+            print(f"Oyun algılandı! Senin rengin: {label}")
+            return color
+        time.sleep(poll_interval)
+    raise TimeoutError("Oyun başlatılmadı (zaman aşımı).")
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Play the trained model against a website's own bots.")
     parser.add_argument("--model", type=str, required=True, help="Path to a MaskablePPO .zip checkpoint.")
@@ -311,6 +337,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num-games", type=int, default=1)
     parser.add_argument("--delay", type=float, default=0.6, help="Seconds to pause after each of our moves.")
     parser.add_argument(
+        "--search-depth",
+        type=int,
+        default=1,
+        help="Ply of alpha-beta lookahead per move (1 = the network's own greedy choice, no search).",
+    )
+    parser.add_argument(
+        "--manual",
+        action="store_true",
+        help="Don't auto-start a game against the site's own bot -- open the browser, let a human "
+        "pick the opponent/mode in it, and start playing once a game is detected. Useful for "
+        "real opponents (a lobby seek, a friend challenge, ...) with no separate API/account needed.",
+    )
+    parser.add_argument(
         "--headless",
         action="store_true",
         help="Not recommended: both sites' boards silently ignore drags in headless mode.",
@@ -323,6 +362,7 @@ def main() -> None:
     model = MaskablePPO.load(args.model)
     our_color = chess.WHITE if args.color == "white" else chess.BLACK
     adapter = ADAPTERS[args.site]()
+    home_url = "https://lichess.org/" if args.site == "lichess" else "https://www.chess.com/play/computer"
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=args.headless)
@@ -331,11 +371,14 @@ def main() -> None:
         results: list[str] = []
         try:
             for game in range(1, args.num_games + 1):
-                print(
-                    f"=== Game {game}/{args.num_games} vs {adapter.name} (difficulty={args.difficulty}) ==="
-                )
-                adapter.start_game(page, args.difficulty, our_color)
-                result = play_game(adapter, page, model, our_color, args.delay)
+                print(f"=== Game {game}/{args.num_games} vs {adapter.name} ===")
+                if args.manual:
+                    page.goto(home_url, wait_until="domcontentloaded", timeout=30000)
+                    our_color = wait_for_manual_game_start(page)
+                else:
+                    print(f"(difficulty={args.difficulty})")
+                    adapter.start_game(page, args.difficulty, our_color)
+                result = play_game(adapter, page, model, our_color, args.delay, args.search_depth)
                 results.append(result)
                 print(f"Game {game} result: {result}")
         finally:

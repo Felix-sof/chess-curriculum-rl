@@ -6,8 +6,8 @@ stockfish_path: "stockfish"
 log_dir: "logs/smoke_test"
 
 curriculum:
-  start_level: 0 # 0 = random-move bootstrap opponent; 1-21 = Stockfish Skill Level 0-20
-  max_level: 21
+  start_level: 0 # 0 = random; 1-3 = depth-ramp; 4-24 = Stockfish Skill Level 0-20
+  max_level: 24
   window_size: 5 # tiny window so a promotion can be observed quickly
   promotion_threshold: 0.60
 
@@ -16,7 +16,7 @@ engine:
 
 reward:
   material_reward_scale: 0.01
-  repetition_penalty: 0.05
+  repetition_penalty: 0.0
 
 policy:
   features_dim: 64
@@ -28,6 +28,6 @@ training:
   batch_size: 64
   n_epochs: 4
   gamma: 0.99
-  ent_coef: 0.01
+  ent_coef: 0.001
   checkpoint_freq: 5_000
   n_envs: 1

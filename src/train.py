@@ -12,6 +12,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+import torch
 import yaml
 from sb3_contrib import MaskablePPO
 from sb3_contrib.common.wrappers import ActionMasker
@@ -131,6 +132,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--resume", type=str, default=None, help="Path to a checkpoint .zip to resume training from."
     )
+    parser.add_argument(
+        "--pretrained-features",
+        type=str,
+        default=None,
+        help="Path to a feature-extractor state dict from pretrain.py (ignored with --resume).",
+    )
     return parser
 
 
@@ -193,6 +200,10 @@ def main() -> None:
             policy_kwargs=policy_kwargs,
             verbose=1,
         )
+        if args.pretrained_features:
+            state_dict = torch.load(args.pretrained_features, map_location=model.device)
+            model.policy.features_extractor.load_state_dict(state_dict)
+            print(f"Warm-started features_extractor from {args.pretrained_features}")
 
     # CheckpointCallback counts calls to _on_step(), which fires once per
     # vec-env step (i.e. once per n_envs timesteps), not once per timestep.
@@ -209,6 +220,12 @@ def main() -> None:
         total_timesteps=total_timesteps,
         callback=CallbackList([checkpoint_callback, curriculum_callback]),
         progress_bar=True,
+        # total_timesteps is always the ABSOLUTE target step count. Without
+        # this, .learn() resets the step counter to 0 on every call (even
+        # after .load() restores it), which reruns from step 0 -- silently
+        # overwriting the earlier run's checkpoint files at the same labels
+        # and training far longer than intended.
+        reset_num_timesteps=not args.resume,
     )
 
     final_path = log_dir / "checkpoints" / "ppo_chess_final.zip"

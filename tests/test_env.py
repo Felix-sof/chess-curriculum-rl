@@ -108,7 +108,7 @@ def test_chess_env_set_skill_level_clamps_range() -> None:
     env.set_skill_level(-5)
     assert env.skill_level == 0
     env.set_skill_level(99)
-    assert env.skill_level == 21
+    assert env.skill_level == 24  # 0 (random) + 3 (depth ramp) + 21 (Skill Level 0-20)
 
 
 def test_chess_env_ends_on_claimable_repetition() -> None:
@@ -161,12 +161,26 @@ def test_chess_env_bootstrap_stage_needs_no_engine() -> None:
 
 
 @requires_stockfish
-def test_chess_env_skill_level_one_maps_to_stockfish_zero() -> None:
+def test_chess_env_depth_ramp_levels_use_full_strength_and_depth_limit() -> None:
     env = ChessEnv(stockfish_path="stockfish", skill_level=1)
+    try:
+        env._ensure_engine()
+        assert env._configured_skill == 20  # depth-ramp levels don't use Skill Level weakening
+        limit = env._opponent_limit()
+        assert limit.depth == 1
+    finally:
+        env.close()
+
+
+@requires_stockfish
+def test_chess_env_skill_level_four_maps_to_stockfish_zero() -> None:
+    env = ChessEnv(stockfish_path="stockfish", skill_level=4)
     try:
         engine = env._ensure_engine()
         assert env._configured_skill == 0
         assert engine is not None
+        limit = env._opponent_limit()
+        assert limit.depth is None  # time-based limit past the depth ramp
     finally:
         env.close()
 

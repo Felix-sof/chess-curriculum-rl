@@ -19,7 +19,15 @@ import time
 import chess
 from sb3_contrib import MaskablePPO
 
-from env import ChessEnv, action_to_move, board_to_tensor, compute_action_mask
+from env import (
+    ChessEnv,
+    action_to_move,
+    board_to_tensor,
+    compute_action_mask,
+    move_to_action,
+    stockfish_level_to_skill_level,
+)
+from search import best_move
 
 
 def _ensure_utf8_stdout() -> None:
@@ -33,7 +41,9 @@ def _ensure_utf8_stdout() -> None:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
-def play_stockfish_game(model: MaskablePPO, env: ChessEnv, delay: float) -> tuple[str, float]:
+def play_stockfish_game(
+    model: MaskablePPO, env: ChessEnv, delay: float, search_depth: int
+) -> tuple[str, float]:
     """Play one game of the agent against the environment's Stockfish opponent."""
     obs, _info = env.reset()
     env.render()
@@ -41,15 +51,18 @@ def play_stockfish_game(model: MaskablePPO, env: ChessEnv, delay: float) -> tupl
     reward = 0.0
     info: dict = {}
     while not (terminated or truncated):
-        action_masks = env.action_masks()
-        action, _states = model.predict(obs, action_masks=action_masks, deterministic=True)
+        if search_depth > 1:
+            action = move_to_action(best_move(model, env.board, depth=search_depth), env.board.turn)
+        else:
+            action_masks = env.action_masks()
+            action, _states = model.predict(obs, action_masks=action_masks, deterministic=True)
         obs, reward, terminated, truncated, info = env.step(int(action))
         time.sleep(delay)
         env.render()
     return info.get("result", "?"), reward
 
 
-def play_self_game(model: MaskablePPO, delay: float) -> tuple[str, float]:
+def play_self_game(model: MaskablePPO, delay: float, search_depth: int) -> tuple[str, float]:
     """Play one game of the model against itself, one board, both colors.
 
     Because observations and actions are encoded canonically from the
@@ -61,10 +74,13 @@ def play_self_game(model: MaskablePPO, delay: float) -> tuple[str, float]:
     # claim_draw=True: an under-trained model can shuffle between two "safe"
     # moves forever otherwise, since repetition isn't a claim by default.
     while not board.is_game_over(claim_draw=True):
-        obs = board_to_tensor(board)
-        action_masks = compute_action_mask(board)
-        action, _states = model.predict(obs, action_masks=action_masks, deterministic=True)
-        move = action_to_move(int(action), board.turn)
+        if search_depth > 1:
+            move = best_move(model, board, depth=search_depth)
+        else:
+            obs = board_to_tensor(board)
+            action_masks = compute_action_mask(board)
+            action, _states = model.predict(obs, action_masks=action_masks, deterministic=True)
+            move = action_to_move(int(action), board.turn)
         board.push(move)
         time.sleep(delay)
         print(board.unicode(borders=True))
@@ -99,6 +115,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stockfish-level", type=int, default=5)
     parser.add_argument("--num-games", type=int, default=3)
     parser.add_argument("--delay", type=float, default=0.5, help="Seconds to pause between moves.")
+    parser.add_argument(
+        "--search-depth",
+        type=int,
+        default=1,
+        help="Ply of alpha-beta lookahead per move (1 = the network's own greedy choice, no search).",
+    )
     return parser
 
 
@@ -109,12 +131,10 @@ def main() -> None:
 
     env: ChessEnv | None = None
     if args.opponent == "stockfish":
-        # --stockfish-level is the literal Stockfish Skill Level (0-20);
-        # ChessEnv reserves skill_level 0 for the random-move bootstrap
-        # opponent, so real Stockfish levels are shifted to 1-21.
+        # --stockfish-level is the literal Stockfish Skill Level (0-20).
         env = ChessEnv(
             stockfish_path=args.stockfish_path,
-            skill_level=args.stockfish_level + 1,
+            skill_level=stockfish_level_to_skill_level(args.stockfish_level),
             render_mode="human",
         )
 
@@ -124,9 +144,9 @@ def main() -> None:
             print(f"\n=== Game {game}/{args.num_games} (opponent={args.opponent}) ===")
             if args.opponent == "stockfish":
                 assert env is not None
-                result, reward = play_stockfish_game(model, env, args.delay)
+                result, reward = play_stockfish_game(model, env, args.delay, args.search_depth)
             else:
-                result, reward = play_self_game(model, args.delay)
+                result, reward = play_self_game(model, args.delay, args.search_depth)
 
             outcome = summarize(reward)
             score[outcome] += 1

@@ -5,7 +5,8 @@ using **curriculum learning**: it starts against a uniform-random mover, then
 graduates through Stockfish Skill Level 0-20, only advancing once its recent
 win rate against the current opponent clears a threshold. This is a
 learning/portfolio project, not an attempt at a state-of-the-art engine — see
-[Limitations](#limitations).
+[Limitations](#limitations) and [EXPERIMENTS.md](EXPERIMENTS.md) for the
+full run-by-run log of what was tried and what actually happened.
 
 ## Motivation
 
@@ -148,6 +149,27 @@ to stdout via SB3's own logger (`verbose=1`). TensorBoard logging is
 intentionally not wired in: its `gfile` backend doesn't reliably handle
 native Windows paths and would break training on some machines.
 
+### Optional: supervised pretraining from human games
+
+Before running RL, the CNN can be warm-started on real games instead of
+random weights -- the same idea used to bootstrap early AlphaGo:
+
+```powershell
+# 1. Download a monthly dump (zstd-compressed) from https://database.lichess.org/
+# 2. Extract (position, human move) pairs:
+python src/prepare_pgn_dataset.py --pgn-zst data/lichess_2013-01.pgn.zst --out data/pretrain_positions.npz --max-positions 1000000
+# 3. Train the feature extractor to predict human moves:
+python src/pretrain.py --dataset data/pretrain_positions.npz --epochs 5 --out logs/pretrained_features.pt
+# 4. Warm-start a fresh training run with it:
+python src/train.py --config configs/default.yaml --pretrained-features logs/pretrained_features.pt
+```
+
+Only the convolutional feature extractor is transferred; the policy and
+value heads still start fresh and are learned entirely through RL, since
+human game data doesn't carry position values or match SB3's own head
+architecture. `--pretrained-features` is ignored together with `--resume`
+(resuming a checkpoint already carries its own trained weights).
+
 ### Plotting progress
 
 ```powershell
@@ -176,6 +198,15 @@ python src/watch.py --model logs/checkpoints/ppo_chess_final.zip --opponent self
 Prints the board in Unicode after every move, pauses `--delay` seconds
 between moves, and after each game prints the result and the running score,
 then starts the next game automatically.
+
+Add `--search-depth N` (N > 1) to have moves picked by a depth-N alpha-beta
+search (`src/search.py`) instead of the network's single greedy forward
+pass -- no retraining needed. The network's policy output only orders moves
+for pruning and its value output only scores leaf positions; forced
+mates/tactics within the search horizon are found exactly. This directly
+addresses a weakness a pure policy network has on its own: correctly judging
+a position as winning is not the same skill as calculating the moves that
+force the win.
 
 ### Using it as a UCI engine (Arena, ChessBase, cutechess, ...)
 
@@ -234,18 +265,24 @@ Tests that require a real Stockfish binary are skipped automatically if
 ```
 chess-curriculum-rl/
 ├── src/
-│   ├── env.py              # ChessEnv (gymnasium wrapper)
-│   ├── curriculum.py       # Skill-level tracking and promotion logic
-│   ├── policy.py           # CNN feature extractor (SB3-compatible)
-│   ├── train.py            # Main training script
-│   ├── evaluate.py         # Evaluate a trained model vs. a fixed Stockfish level
-│   ├── watch.py            # Unattended live-play demo
-│   ├── uci_engine.py       # UCI protocol engine wrapper
-│   ├── plot_progress.py    # Win-rate / curriculum-level chart
-│   └── lichess_bot.py      # Optional Lichess Bot API integration
+│   ├── env.py                  # ChessEnv (gymnasium wrapper)
+│   ├── curriculum.py           # Skill-level tracking and promotion logic
+│   ├── policy.py               # CNN feature extractor (SB3-compatible)
+│   ├── search.py               # Optional alpha-beta lookahead at inference time
+│   ├── train.py                # Main training script
+│   ├── evaluate.py             # Evaluate a trained model vs. a fixed Stockfish level
+│   ├── sweep_checkpoints.py    # Evaluate every checkpoint from a run, plot the curve
+│   ├── watch.py                # Unattended live-play demo
+│   ├── uci_engine.py           # UCI protocol engine wrapper
+│   ├── browser_bot.py          # Play a website's own bots (chess.com, lichess.org)
+│   ├── plot_progress.py        # Win-rate / curriculum-level chart
+│   ├── prepare_pgn_dataset.py  # Extract (position, move) pairs from a Lichess PGN dump
+│   ├── pretrain.py             # Supervised pretraining on human games
+│   └── lichess_bot.py          # Optional Lichess Bot API integration
 ├── tests/
 │   ├── test_env.py
-│   └── test_curriculum.py
+│   ├── test_curriculum.py
+│   └── test_search.py
 ├── configs/
 │   ├── default.yaml
 │   └── smoke_test.yaml

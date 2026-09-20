@@ -16,6 +16,9 @@ logs/*
 *.pt
 *.pth
 
+# Downloaded/extracted pretraining data (regenerate via prepare_pgn_dataset.py)
+data/
+
 # Tooling caches
 .pytest_cache/
 .mypy_cache/

@@ -30,6 +30,10 @@ berserk>=0.13
 #   playwright install chromium
 playwright>=1.40
 
+# Optional: supervised pretraining from human games (src/prepare_pgn_dataset.py,
+# src/pretrain.py). Decompresses lichess.org's .pgn.zst database dumps.
+zstandard>=0.22
+
 # Dev / quality
 pytest>=8.0
 black>=24.0

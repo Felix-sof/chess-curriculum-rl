@@ -8,6 +8,10 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "C4", "RUF", "DTZ"]
+# RUF001/002/003: this project intentionally has Turkish user-facing strings
+# (e.g. browser_bot.py's manual-play prompts), which trip "ambiguous
+# character" warnings for ordinary Turkish letters like dotless i (ı).
+ignore = ["RUF001", "RUF002", "RUF003"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

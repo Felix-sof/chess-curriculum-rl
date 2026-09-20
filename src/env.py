@@ -9,6 +9,7 @@ network can play either color without knowing which one it is.
 
 from __future__ import annotations
 
+import contextlib
 import random
 from typing import Any, ClassVar
 
@@ -114,16 +115,28 @@ def material_balance(board: chess.Board, color: chess.Color) -> int:
     return balance
 
 
+_DEPTH_RAMP: tuple[int, ...] = (1, 2, 4)  # ply depth for curriculum levels 1..len(_DEPTH_RAMP)
+
+
+def stockfish_level_to_skill_level(stockfish_level: int) -> int:
+    """Convert a literal Stockfish Skill Level (0-20) to ``ChessEnv``'s
+    ``skill_level`` scale, which reserves the low end for the random-move
+    bootstrap and depth-ramp stages (see :meth:`ChessEnv.set_skill_level`)."""
+    return stockfish_level + len(_DEPTH_RAMP) + 1
+
+
 class ChessEnv(gym.Env):
     """A single-agent chess environment played against a Stockfish opponent.
 
     Each episode, the agent is randomly assigned White or Black and plays
-    to completion against an opponent at ``skill_level`` (0 = a uniform-random
-    mover, a bootstrap stage easier than any real Stockfish setting; 1-21 map
-    to Stockfish Skill Level 0-20). The observation is a canonical (12, 8, 8)
-    board tensor and the action space is a ``Discrete(64 * 64 * 5)`` encoding
-    of (from, to, promotion) in that same canonical frame; use
-    :meth:`action_masks` for action masking.
+    to completion against an opponent at ``skill_level``: 0 is a
+    uniform-random mover; 1-3 are full-strength Stockfish limited to 1/2/4
+    ply of lookahead (a depth ramp bridging the large gap between random
+    play and a real engine's full search); 4-24 map to Stockfish Skill Level
+    0-20. The observation is a canonical (12, 8, 8) board tensor and the
+    action space is a ``Discrete(64 * 64 * 5)`` encoding of (from, to,
+    promotion) in that same canonical frame; use :meth:`action_masks` for
+    action masking.
 
     Reward is win/loss/draw (+-1/0) at the end, plus two optional per-move
     shaping terms: ``material_reward_scale`` (change in material balance)
@@ -146,7 +159,7 @@ class ChessEnv(gym.Env):
     ) -> None:
         super().__init__()
         self.stockfish_path = stockfish_path
-        self.skill_level = max(0, min(21, skill_level))
+        self.skill_level = max(0, min(len(_DEPTH_RAMP) + 21, skill_level))
         self.material_reward_scale = material_reward_scale
         self.repetition_penalty = repetition_penalty
         self.engine_think_time = engine_think_time
@@ -164,20 +177,32 @@ class ChessEnv(gym.Env):
     def _ensure_engine(self) -> chess.engine.SimpleEngine:
         if self._engine is None:
             self._engine = chess.engine.SimpleEngine.popen_uci(self.stockfish_path)
-        stockfish_skill = self.skill_level - 1
+        if self.skill_level <= len(_DEPTH_RAMP):
+            # Depth-ramp stages: full-strength move selection, but starved
+            # of lookahead, rather than Stockfish's own "Skill Level" noise.
+            stockfish_skill = 20
+        else:
+            stockfish_skill = self.skill_level - len(_DEPTH_RAMP) - 1
         if self._configured_skill != stockfish_skill:
             self._engine.configure({"Skill Level": stockfish_skill})
             self._configured_skill = stockfish_skill
         return self._engine
 
+    def _opponent_limit(self) -> chess.engine.Limit:
+        if self.skill_level <= len(_DEPTH_RAMP):
+            return chess.engine.Limit(depth=_DEPTH_RAMP[self.skill_level - 1])
+        return chess.engine.Limit(time=self.engine_think_time)
+
     def set_skill_level(self, skill_level: int) -> None:
         """Update the opponent's difficulty; applied on the next move.
 
-        0 is a uniform-random mover (a bootstrap stage easier than any real
-        Stockfish setting, meant to get the agent its first wins). 1-21 map
-        to Stockfish Skill Level 0-20.
+        0 is a uniform-random mover. 1-3 are a depth-ramp of full-strength
+        Stockfish limited to 1/2/4 ply of lookahead (a bridge between random
+        play and full search -- a real engine even at "Skill Level 0" is
+        otherwise a big jump up from a random mover). 4-24 map to Stockfish
+        Skill Level 0-20.
         """
-        self.skill_level = max(0, min(21, skill_level))
+        self.skill_level = max(0, min(len(_DEPTH_RAMP) + 21, skill_level))
 
     def reset(
         self, *, seed: int | None = None, options: dict[str, Any] | None = None
@@ -215,10 +240,30 @@ class ChessEnv(gym.Env):
             move = random.choice(list(self.board.legal_moves))
             self.board.push(move)
             return
-        engine = self._ensure_engine()
-        result = engine.play(self.board, chess.engine.Limit(time=self.engine_think_time))
-        if result.move is not None:
-            self.board.push(result.move)
+        for _attempt in range(2):
+            try:
+                engine = self._ensure_engine()
+                result = engine.play(self.board, self._opponent_limit())
+                if result.move is not None:
+                    self.board.push(result.move)
+                return
+            except (chess.engine.EngineError, TimeoutError, OSError):
+                # A hung/crashed Stockfish process (observed after long
+                # unattended runs) would otherwise deadlock the whole
+                # training run: SubprocVecEnv waits forever on a worker that
+                # never replies. Restart the engine and retry once.
+                self._restart_engine()
+        # Still failing after a retry: don't crash a multi-hour run over one
+        # move, just have the opponent pass on a random legal move.
+        move = random.choice(list(self.board.legal_moves))
+        self.board.push(move)
+
+    def _restart_engine(self) -> None:
+        if self._engine is not None:
+            with contextlib.suppress(Exception):
+                self._engine.quit()
+            self._engine = None
+            self._configured_skill = None
 
     def _terminal_reward(self) -> float:
         outcome = self.board.outcome(claim_draw=True)
